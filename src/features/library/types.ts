@@ -47,3 +47,8 @@ export interface ReadingProgressRecord {
   scroll_offset: number;
   updated_at: number;
 }
+
+export interface AudiobookEntry {
+  book_id: string;
+  added_at: number;
+}

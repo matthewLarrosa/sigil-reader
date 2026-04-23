@@ -33,6 +33,13 @@ export default function TabLayout() {
         }}
       />
       <Tabs.Screen
+        name="audiobooks"
+        options={{
+          title: 'Audiobooks',
+          tabBarIcon: ({ color }) => <Ionicons size={24} name="headset" color={color} />,
+        }}
+      />
+      <Tabs.Screen
         name="settings"
         options={{
           title: 'Settings',

@@ -2,6 +2,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 
 import { BookRepository } from '@/features/library/book-repository';
 import {
+  AudiobookEntry,
   Book,
   Chapter,
   ParsedBookManifest,
@@ -23,6 +24,7 @@ interface LibraryStore {
   chapters: Chapter[];
   readingProgress: ReadingProgressRecord[];
   bookmarks: BookmarkRecord[];
+  audiobooks: AudiobookEntry[];
 }
 
 const emptyStore: LibraryStore = {
@@ -30,6 +32,7 @@ const emptyStore: LibraryStore = {
   chapters: [],
   readingProgress: [],
   bookmarks: [],
+  audiobooks: [],
 };
 
 let operationQueue: Promise<void> = Promise.resolve();
@@ -48,6 +51,7 @@ function cloneStore(store: LibraryStore): LibraryStore {
     chapters: [...store.chapters],
     readingProgress: [...store.readingProgress],
     bookmarks: [...store.bookmarks],
+    audiobooks: [...store.audiobooks],
   };
 }
 
@@ -75,6 +79,7 @@ async function readStore(): Promise<LibraryStore> {
       chapters: parsed.chapters ?? [],
       readingProgress: parsed.readingProgress ?? [],
       bookmarks: parsed.bookmarks ?? [],
+      audiobooks: parsed.audiobooks ?? [],
     };
   } catch {
     return cloneStore(emptyStore);
@@ -115,6 +120,7 @@ export class JsonBookRepository implements BookRepository {
       store.chapters = store.chapters.filter((chapter) => chapter.book_id !== bookId);
       store.readingProgress = store.readingProgress.filter((progress) => progress.book_id !== bookId);
       store.bookmarks = store.bookmarks.filter((bookmark) => bookmark.book_id !== bookId);
+      store.audiobooks = store.audiobooks.filter((entry) => entry.book_id !== bookId);
     });
   }
 
@@ -329,6 +335,42 @@ export class JsonBookRepository implements BookRepository {
         progressRatio: bookmark.progress_ratio,
         createdAt: bookmark.created_at,
       }));
+  }
+
+  async addAudiobook(bookId: string): Promise<void> {
+    await updateStore((store) => {
+      if (store.audiobooks.some((entry) => entry.book_id === bookId)) {
+        return;
+      }
+
+      store.audiobooks = [{ book_id: bookId, added_at: Date.now() }, ...store.audiobooks];
+    });
+  }
+
+  async removeAudiobook(bookId: string): Promise<void> {
+    await updateStore((store) => {
+      store.audiobooks = store.audiobooks.filter((entry) => entry.book_id !== bookId);
+    });
+  }
+
+  async listAudiobookEntries(): Promise<AudiobookEntry[]> {
+    const store = await readStore();
+    return [...store.audiobooks].sort((a, b) => b.added_at - a.added_at);
+  }
+
+  async listAudiobookBooks(): Promise<Book[]> {
+    const store = await readStore();
+    const booksById = new Map(store.books.map((book) => [book.id, book]));
+
+    return [...store.audiobooks]
+      .sort((a, b) => b.added_at - a.added_at)
+      .map((entry) => booksById.get(entry.book_id))
+      .filter((book): book is Book => Boolean(book));
+  }
+
+  async isAudiobook(bookId: string): Promise<boolean> {
+    const store = await readStore();
+    return store.audiobooks.some((entry) => entry.book_id === bookId);
   }
 
   async reset(): Promise<void> {

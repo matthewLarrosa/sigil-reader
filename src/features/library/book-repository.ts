@@ -1,4 +1,5 @@
 import {
+  AudiobookEntry,
   Book,
   Chapter,
   ParsedBookManifest,
@@ -58,4 +59,9 @@ export interface BookRepository {
       createdAt: number;
     }[]
   >;
+  addAudiobook(bookId: string): Promise<void>;
+  removeAudiobook(bookId: string): Promise<void>;
+  listAudiobookEntries(): Promise<AudiobookEntry[]>;
+  listAudiobookBooks(): Promise<Book[]>;
+  isAudiobook(bookId: string): Promise<boolean>;
 }
