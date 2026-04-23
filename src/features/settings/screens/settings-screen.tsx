@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Screen } from '@/components/layout/screen';
-import { getSetting, upsertSetting } from '@/db/client';
+import { getLocalSetting, resetLocalSettings, upsertLocalSetting } from '@/config/local-settings';
+import { libraryImportService } from '@/features/library/services/import-epub';
 import { useAppTheme } from '@/theme/theme-provider';
 import { tokens } from '@/theme/tokens';
 
@@ -15,9 +16,10 @@ export function SettingsScreen() {
   const { theme, setThemeName } = useAppTheme();
   const [audioMode, setAudioMode] = useState<AudioMode>('charger_only');
   const [speed, setSpeed] = useState(1);
+  const [isResetting, setIsResetting] = useState(false);
 
   useEffect(() => {
-    Promise.all([getSetting(AUDIO_MODE_KEY), getSetting(SPEED_KEY)])
+    Promise.all([getLocalSetting(AUDIO_MODE_KEY), getLocalSetting(SPEED_KEY)])
       .then(([mode, speedValue]) => {
         if (mode === 'live' || mode === 'charger_only' || mode === 'aggressive_cache') {
           setAudioMode(mode);
@@ -31,13 +33,33 @@ export function SettingsScreen() {
 
   const applyAudioMode = async (mode: AudioMode) => {
     setAudioMode(mode);
-    await upsertSetting(AUDIO_MODE_KEY, mode);
+    await upsertLocalSetting(AUDIO_MODE_KEY, mode);
   };
 
   const applySpeed = async (nextSpeed: number) => {
     const clamped = Math.min(3, Math.max(0.75, nextSpeed));
     setSpeed(clamped);
-    await upsertSetting(SPEED_KEY, clamped.toFixed(2));
+    await upsertLocalSetting(SPEED_KEY, clamped.toFixed(2));
+  };
+
+  const handleResetLocalData = () => {
+    Alert.alert(
+      'Reset local data?',
+      'This removes all imported books, progress, generated audio, and settings on this device.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Reset',
+          style: 'destructive',
+          onPress: () => {
+            setIsResetting(true);
+            Promise.all([libraryImportService.resetLocalData(), resetLocalSettings()]).finally(() =>
+              setIsResetting(false),
+            );
+          },
+        },
+      ],
+    );
   };
 
   return (
@@ -125,6 +147,24 @@ export function SettingsScreen() {
             </Text>
           </Pressable>
         </View>
+      </View>
+
+      <View
+        style={[
+          styles.panel,
+          { borderColor: theme.colors.border, backgroundColor: theme.colors.surface },
+        ]}
+      >
+        <Text style={[styles.panelHeading, { color: theme.colors.text }]}>Local Data</Text>
+        <Pressable
+          disabled={isResetting}
+          onPress={handleResetLocalData}
+          style={[styles.choice, { borderColor: theme.colors.danger }]}
+        >
+          <Text style={{ color: theme.colors.danger }}>
+            {isResetting ? 'Resetting...' : 'Reset Local Data'}
+          </Text>
+        </Pressable>
       </View>
     </Screen>
   );

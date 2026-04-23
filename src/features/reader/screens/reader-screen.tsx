@@ -1,5 +1,5 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   NativeScrollEvent,
   NativeSyntheticEvent,
@@ -7,17 +7,16 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Screen } from '@/components/layout/screen';
-import { bookRepository } from '@/features/library/sqlite-book-repository';
+import { bookRepository } from '@/features/library/json-book-repository';
 import { Chapter } from '@/features/library/types';
 import {
   defaultReaderPreferences,
   getReaderPreferences,
-  saveReaderPreferences,
 } from '@/features/reader/services/reader-preferences';
 import { ReaderPreferences } from '@/features/reader/types';
 import { useAppTheme } from '@/theme/theme-provider';
@@ -28,6 +27,7 @@ export function ReaderScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
   const { theme } = useAppTheme();
+  const insets = useSafeAreaInsets();
   const bookId = useMemo(() => {
     const value = params.bookId;
     if (Array.isArray(value)) {
@@ -45,24 +45,37 @@ export function ReaderScreen() {
 
   const [chapter, setChapter] = useState<Chapter | null>(null);
   const [preferences, setPreferences] = useState<ReaderPreferences>(defaultReaderPreferences);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchHits, setSearchHits] = useState<Chapter[]>([]);
+  const [progressRatio, setProgressRatio] = useState(0);
+  const [bookmarkMessage, setBookmarkMessage] = useState<string | null>(null);
+  const scrollViewRef = useRef<ScrollView | null>(null);
+  const latestProgressRef = useRef({ ratio: 0, offset: 0, savedAt: 0 });
+  const restoreOffsetRef = useRef(0);
+  const didRestoreScrollRef = useRef(false);
 
   const load = useCallback(async () => {
-    const [chapterRow, progressRow, prefRow] = await Promise.all([
+    const [chapterRow, prefRow, progressRow] = await Promise.all([
       bookRepository.getChapter(bookId, chapterId),
-      bookRepository.getReadingProgress(bookId),
       getReaderPreferences(),
+      bookRepository.getReadingProgress(bookId),
     ]);
     setPreferences(prefRow);
     setChapter(chapterRow);
-    if (progressRow && progressRow.chapter_id !== chapterId) {
-      router.replace({
-        pathname: '/reader/[bookId]/[chapterId]',
-        params: { bookId, chapterId: progressRow.chapter_id },
-      });
+    if (progressRow?.chapter_id === chapterId) {
+      setProgressRatio(progressRow.progress_ratio);
+      restoreOffsetRef.current = progressRow.scroll_offset;
+      didRestoreScrollRef.current = false;
+      latestProgressRef.current = {
+        ratio: progressRow.progress_ratio,
+        offset: progressRow.scroll_offset,
+        savedAt: Date.now(),
+      };
+    } else {
+      setProgressRatio(0);
+      restoreOffsetRef.current = 0;
+      didRestoreScrollRef.current = true;
+      latestProgressRef.current = { ratio: 0, offset: 0, savedAt: 0 };
     }
-  }, [bookId, chapterId, router]);
+  }, [bookId, chapterId]);
 
   useEffect(() => {
     load().catch(() => undefined);
@@ -81,53 +94,75 @@ export function ReaderScreen() {
     [bookId, chapterId, router],
   );
 
-  const saveProgressFromScroll = useCallback(
-    async (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-      const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-      const maxScroll = Math.max(contentSize.height - layoutMeasurement.height, 1);
-      const ratio = Math.min(1, Math.max(0, contentOffset.y / maxScroll));
+  const persistProgress = useCallback(
+    async (ratio: number, offset: number) => {
       await bookRepository.saveReadingProgress({
         book_id: bookId,
         chapter_id: chapterId,
         progress_ratio: ratio,
-        scroll_offset: contentOffset.y,
+        scroll_offset: offset,
         updated_at: Date.now(),
       });
     },
     [bookId, chapterId],
   );
 
-  const handleSearch = useCallback(async () => {
-    if (!searchQuery.trim()) {
-      setSearchHits([]);
+  const updateProgressFromScroll = useCallback(
+    async (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+      if (!didRestoreScrollRef.current) {
+        return;
+      }
+      const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
+      const maxScroll = Math.max(contentSize.height - layoutMeasurement.height, 1);
+      const ratio = Math.min(1, Math.max(0, contentOffset.y / maxScroll));
+      setProgressRatio(ratio);
+      latestProgressRef.current = {
+        ratio,
+        offset: contentOffset.y,
+        savedAt: latestProgressRef.current.savedAt,
+      };
+
+      const now = Date.now();
+      if (now - latestProgressRef.current.savedAt > 1000) {
+        latestProgressRef.current.savedAt = now;
+        await persistProgress(ratio, contentOffset.y);
+      }
+    },
+    [persistProgress],
+  );
+
+  const restoreScrollPosition = useCallback(() => {
+    if (didRestoreScrollRef.current) {
       return;
     }
-    const results = await bookRepository.searchBook(bookId, searchQuery.trim());
-    setSearchHits(results);
-  }, [bookId, searchQuery]);
+
+    didRestoreScrollRef.current = true;
+    if (restoreOffsetRef.current <= 0) {
+      return;
+    }
+
+    requestAnimationFrame(() => {
+      scrollViewRef.current?.scrollTo({
+        y: restoreOffsetRef.current,
+        animated: false,
+      });
+    });
+  }, []);
 
   const addBookmark = useCallback(async () => {
+    const ratio = latestProgressRef.current.ratio;
     await bookRepository.addBookmark({
       id: createId('bookmark'),
       bookId,
       chapterId,
       label: chapter?.title ?? 'Bookmark',
-      progressRatio: 0,
+      progressRatio: ratio,
       createdAt: Date.now(),
     });
-  }, [bookId, chapter?.title, chapterId]);
-
-  const updateFontSize = useCallback(
-    async (delta: number) => {
-      const next = {
-        ...preferences,
-        fontSize: Math.min(30, Math.max(14, preferences.fontSize + delta)),
-      };
-      setPreferences(next);
-      await saveReaderPreferences(next);
-    },
-    [preferences],
-  );
+    await persistProgress(ratio, latestProgressRef.current.offset);
+    setBookmarkMessage('Bookmark saved');
+    setTimeout(() => setBookmarkMessage(null), 1600);
+  }, [bookId, chapter?.title, chapterId, persistProgress]);
 
   return (
     <Screen>
@@ -137,84 +172,44 @@ export function ReaderScreen() {
         </Text>
         <View style={styles.headerActions}>
           <Pressable
-            onPress={() => updateFontSize(-1)}
-            style={[styles.chip, { borderColor: theme.colors.border }]}
-          >
-            <Text style={{ color: theme.colors.text }}>A-</Text>
-          </Pressable>
-          <Pressable
-            onPress={() => updateFontSize(1)}
-            style={[styles.chip, { borderColor: theme.colors.border }]}
-          >
-            <Text style={{ color: theme.colors.text }}>A+</Text>
-          </Pressable>
-          <Pressable
             onPress={addBookmark}
-            style={[styles.chip, { borderColor: theme.colors.border }]}
+            style={[
+              styles.chip,
+              {
+                borderColor: bookmarkMessage ? theme.colors.success : theme.colors.border,
+                backgroundColor: bookmarkMessage ? theme.colors.highlight : 'transparent',
+              },
+            ]}
           >
-            <Text style={{ color: theme.colors.text }}>Bookmark</Text>
+            <Text style={{ color: bookmarkMessage ? theme.colors.success : theme.colors.text }}>
+              {bookmarkMessage ?? 'Save'}
+            </Text>
           </Pressable>
           <Pressable
             onPress={() =>
               router.push({
-                pathname: '/player/[bookId]',
-                params: { bookId },
+                pathname: '/reader-menu/[bookId]/[chapterId]',
+                params: { bookId, chapterId },
               })
             }
             style={[styles.chip, { borderColor: theme.colors.border }]}
           >
-            <Text style={{ color: theme.colors.text }}>Listen</Text>
+            <Text style={{ color: theme.colors.text }}>Menu</Text>
           </Pressable>
         </View>
       </View>
 
-      <View style={styles.searchRow}>
-        <TextInput
-          placeholder="Search this book"
-          placeholderTextColor={theme.colors.textMuted}
-          value={searchQuery}
-          onChangeText={setSearchQuery}
-          onSubmitEditing={handleSearch}
-          style={[
-            styles.searchInput,
-            {
-              color: theme.colors.text,
-              borderColor: theme.colors.border,
-              backgroundColor: theme.colors.surface,
-            },
-          ]}
-        />
-        <Pressable
-          onPress={handleSearch}
-          style={[styles.searchButton, { backgroundColor: theme.colors.primary }]}
-        >
-          <Text style={styles.searchButtonLabel}>Find</Text>
-        </Pressable>
-      </View>
-
-      {searchHits.length > 0 ? (
-        <View style={styles.searchResults}>
-          {searchHits.slice(0, 3).map((result) => (
-            <Pressable
-              key={result.id}
-              onPress={() =>
-                router.replace({
-                  pathname: '/reader/[bookId]/[chapterId]',
-                  params: { bookId, chapterId: result.id },
-                })
-              }
-            >
-              <Text style={[styles.searchResultText, { color: theme.colors.primary }]}>
-                {result.title}
-              </Text>
-            </Pressable>
-          ))}
-        </View>
-      ) : null}
+      <Text style={[styles.progressText, { color: theme.colors.textMuted }]}>
+        {Math.round(progressRatio * 100)}% through this chapter
+      </Text>
 
       <ScrollView
-        onMomentumScrollEnd={saveProgressFromScroll}
-        onScrollEndDrag={saveProgressFromScroll}
+        ref={scrollViewRef}
+        onMomentumScrollEnd={updateProgressFromScroll}
+        onScroll={updateProgressFromScroll}
+        onScrollEndDrag={updateProgressFromScroll}
+        onContentSizeChange={restoreScrollPosition}
+        scrollEventThrottle={500}
         contentContainerStyle={styles.chapterContent}
       >
         <Text
@@ -229,7 +224,7 @@ export function ReaderScreen() {
         </Text>
       </ScrollView>
 
-      <View style={styles.footerControls}>
+      <View style={[styles.footerControls, { paddingBottom: Math.max(insets.bottom, tokens.spacing.md) }]}>
         <Pressable
           onPress={() => goToChapter('previous')}
           style={[styles.navButton, { borderColor: theme.colors.border }]}
@@ -249,15 +244,18 @@ export function ReaderScreen() {
 
 const styles = StyleSheet.create({
   header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     gap: tokens.spacing.sm,
   },
   title: {
+    flex: 1,
     fontSize: tokens.typography.heading,
     fontWeight: '700',
   },
   headerActions: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
     gap: tokens.spacing.sm,
   },
   chip: {
@@ -273,38 +271,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: tokens.spacing.sm,
     justifyContent: 'space-between',
+    paddingTop: tokens.spacing.sm,
   },
   navButton: {
+    flex: 1,
+    alignItems: 'center',
     borderWidth: 1,
     borderRadius: tokens.radius.md,
     paddingHorizontal: tokens.spacing.lg,
-    paddingVertical: tokens.spacing.sm,
+    paddingVertical: tokens.spacing.md,
   },
-  searchRow: {
-    flexDirection: 'row',
-    gap: tokens.spacing.sm,
-    alignItems: 'center',
-  },
-  searchInput: {
-    flex: 1,
-    borderWidth: 1,
-    borderRadius: tokens.radius.md,
-    paddingHorizontal: tokens.spacing.md,
-    paddingVertical: tokens.spacing.sm,
-  },
-  searchButton: {
-    borderRadius: tokens.radius.md,
-    paddingHorizontal: tokens.spacing.md,
-    paddingVertical: tokens.spacing.sm,
-  },
-  searchButtonLabel: {
-    color: '#FFFFFF',
-    fontWeight: '600',
-  },
-  searchResults: {
-    gap: tokens.spacing.xs,
-  },
-  searchResultText: {
+  progressText: {
     fontSize: tokens.typography.caption,
     fontWeight: '600',
   },

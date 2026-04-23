@@ -7,6 +7,8 @@ import {
 } from '@/features/library/types';
 
 export interface BookRepository {
+  recoverInterruptedParses(): Promise<void>;
+  deleteBook(bookId: string): Promise<void>;
   listBooks(): Promise<Book[]>;
   getBookById(bookId: string): Promise<Book | null>;
   createImportedBook(params: {
@@ -33,6 +35,12 @@ export interface BookRepository {
   saveReadingProgress(progress: ReadingProgressRecord): Promise<void>;
   getReadingProgress(bookId: string): Promise<ReadingProgressRecord | null>;
   listContinueReading(limit?: number): Promise<ReadingProgressRecord[]>;
+  getContinueReadingItems(limit?: number): Promise<
+    (ReadingProgressRecord & {
+      bookTitle: string;
+      chapterTitle: string;
+    })[]
+  >;
   addBookmark(params: {
     id: string;
     bookId: string;
@@ -41,4 +49,13 @@ export interface BookRepository {
     progressRatio: number;
     createdAt: number;
   }): Promise<void>;
+  listBookmarks(bookId: string): Promise<
+    {
+      id: string;
+      chapterId: string;
+      label: string;
+      progressRatio: number;
+      createdAt: number;
+    }[]
+  >;
 }

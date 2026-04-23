@@ -7,7 +7,6 @@ import Constants from 'expo-constants';
 import { StatusBar } from 'expo-status-bar';
 import { PropsWithChildren, useEffect } from 'react';
 
-import { getDatabase } from '@/db/client';
 import { playerService } from '@/features/player/services-track-player';
 import { AppThemeProvider, useAppTheme } from '@/theme/theme-provider';
 
@@ -17,10 +16,6 @@ function InternalProviders({ children }: PropsWithChildren) {
     Constants.appOwnership === 'expo' || Constants.executionEnvironment === 'storeClient';
 
   useEffect(() => {
-    getDatabase().catch((error) => {
-      console.error('Database initialization failed', error);
-    });
-
     if (!isExpoGo) {
       playerService.setup().catch((error) => {
         console.warn('Audio player setup skipped', error);

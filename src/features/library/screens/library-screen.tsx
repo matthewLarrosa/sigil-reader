@@ -1,3 +1,4 @@
+import { useFocusEffect } from '@react-navigation/native';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import {
@@ -11,8 +12,7 @@ import {
 } from 'react-native';
 
 import { Screen } from '@/components/layout/screen';
-import { libraryImportService } from '@/features/library/services/import-epub';
-import { bookRepository } from '@/features/library/sqlite-book-repository';
+import { bookRepository } from '@/features/library/json-book-repository';
 import { Book, ReadingProgressRecord } from '@/features/library/types';
 import { useAppTheme } from '@/theme/theme-provider';
 import { tokens } from '@/theme/tokens';
@@ -22,9 +22,10 @@ export function LibraryScreen() {
   const { theme } = useAppTheme();
 
   const [books, setBooks] = useState<Book[]>([]);
-  const [continueReading, setContinueReading] = useState<ReadingProgressRecord[]>([]);
+  const [continueReading, setContinueReading] = useState<
+    (ReadingProgressRecord & { bookTitle: string; chapterTitle: string })[]
+  >([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isImporting, setIsImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
@@ -32,7 +33,7 @@ export function LibraryScreen() {
     try {
       const [bookRows, continueRows] = await Promise.all([
         bookRepository.listBooks(),
-        bookRepository.listContinueReading(),
+        bookRepository.getContinueReadingItems(),
       ]);
       setBooks(bookRows);
       setContinueReading(continueRows);
@@ -40,7 +41,6 @@ export function LibraryScreen() {
       setError(loadError instanceof Error ? loadError.message : 'Unable to load library.');
     } finally {
       setIsLoading(false);
-      setIsImporting(false);
     }
   }, []);
 
@@ -48,23 +48,26 @@ export function LibraryScreen() {
     loadData().catch(() => undefined);
   }, [loadData]);
 
-  const handleImport = useCallback(async () => {
-    setIsImporting(true);
-    setError(null);
-    try {
-      const importedBookId = await libraryImportService.pickAndImportEpub();
-      await loadData();
-      if (importedBookId) {
-        router.push({
-          pathname: '/books/[bookId]',
-          params: { bookId: importedBookId },
-        });
-      }
-    } catch (importError) {
-      setError(importError instanceof Error ? importError.message : 'Import failed.');
-      setIsImporting(false);
+  useFocusEffect(
+    useCallback(() => {
+      loadData().catch(() => undefined);
+    }, [loadData]),
+  );
+
+  useEffect(() => {
+    const hasActiveParsing = books.some(
+      (book) => book.parsing_status === 'pending' || book.parsing_status === 'parsing',
+    );
+    if (!hasActiveParsing) {
+      return;
     }
-  }, [loadData, router]);
+
+    const interval = setInterval(() => {
+      loadData().catch(() => undefined);
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [books, loadData]);
 
   const content = isLoading ? (
     <View style={styles.centered}>
@@ -72,7 +75,7 @@ export function LibraryScreen() {
     </View>
   ) : (
     <FlatList
-      refreshControl={<RefreshControl refreshing={isImporting} onRefresh={handleImport} />}
+      refreshControl={<RefreshControl refreshing={isLoading} onRefresh={loadData} />}
       data={books}
       keyExtractor={(item) => item.id}
       ListHeaderComponent={
@@ -81,51 +84,50 @@ export function LibraryScreen() {
           <Text style={[styles.caption, { color: theme.colors.textMuted }]}>
             Import EPUB files and keep everything offline.
           </Text>
-          <Pressable
-            disabled={isImporting}
-            onPress={handleImport}
-            style={[
-              styles.importButton,
-              {
-                backgroundColor: theme.colors.primary,
-                opacity: isImporting ? 0.6 : 1,
-              },
-            ]}
-          >
-            <Text style={styles.importButtonLabel}>
-              {isImporting ? 'Importing...' : 'Import EPUB'}
-            </Text>
-          </Pressable>
           {continueReading.length > 0 ? (
-            <View
-              style={[
-                styles.panel,
-                { backgroundColor: theme.colors.surface, borderColor: theme.colors.border },
-              ]}
-            >
-              <Text style={[styles.panelTitle, { color: theme.colors.text }]}>
-                Continue Reading
-              </Text>
-              {continueReading.map((progress) => (
-                <Pressable
-                  key={progress.book_id}
-                  style={styles.inlineRow}
-                  onPress={() =>
-                    router.push({
-                      pathname: '/reader/[bookId]/[chapterId]',
-                      params: { bookId: progress.book_id, chapterId: progress.chapter_id },
-                    })
-                  }
-                >
-                  <Text style={[styles.caption, { color: theme.colors.text }]}>
-                    {progress.book_id}
-                  </Text>
-                  <Text style={[styles.caption, { color: theme.colors.textMuted }]}>
-                    {Math.round(progress.progress_ratio * 100)}%
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
+            <>
+              <View
+                style={[
+                  styles.panel,
+                  { backgroundColor: theme.colors.surface, borderColor: theme.colors.border },
+                ]}
+              >
+                <Text style={[styles.panelTitle, { color: theme.colors.text }]}>
+                  Continue Reading
+                </Text>
+                {continueReading.map((progress) => (
+                  <Pressable
+                    key={progress.book_id}
+                    style={styles.inlineRow}
+                    onPress={() =>
+                      router.push({
+                        pathname: '/reader/[bookId]/[chapterId]',
+                        params: { bookId: progress.book_id, chapterId: progress.chapter_id },
+                      })
+                    }
+                  >
+                    <View style={styles.continueText}>
+                      <Text
+                        style={[
+                          styles.caption,
+                          styles.continueTitle,
+                          { color: theme.colors.text },
+                        ]}
+                      >
+                        {progress.bookTitle}
+                      </Text>
+                      <Text style={[styles.caption, { color: theme.colors.textMuted }]}>
+                        {progress.chapterTitle}
+                      </Text>
+                    </View>
+                    <Text style={[styles.caption, { color: theme.colors.textMuted }]}>
+                      {Math.round(progress.progress_ratio * 100)}%
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+              <View style={[styles.insetDivider, { backgroundColor: theme.colors.border }]} />
+            </>
           ) : null}
           {error ? (
             <Text style={[styles.errorText, { color: theme.colors.danger }]}>{error}</Text>
@@ -207,16 +209,6 @@ const styles = StyleSheet.create({
   caption: {
     fontSize: tokens.typography.caption,
   },
-  importButton: {
-    alignSelf: 'flex-start',
-    paddingHorizontal: tokens.spacing.lg,
-    paddingVertical: tokens.spacing.sm,
-    borderRadius: tokens.radius.md,
-  },
-  importButtonLabel: {
-    color: '#FFFFFF',
-    fontWeight: '600',
-  },
   bookCard: {
     borderWidth: 1,
     borderRadius: tokens.radius.lg,
@@ -252,5 +244,19 @@ const styles = StyleSheet.create({
   inlineRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: tokens.spacing.md,
+  },
+  continueText: {
+    flex: 1,
+  },
+  continueTitle: {
+    fontWeight: '700',
+  },
+  insetDivider: {
+    height: StyleSheet.hairlineWidth,
+    marginHorizontal: tokens.spacing.md,
+    marginTop: tokens.spacing.md,
+    marginBottom: 0,
   },
 });

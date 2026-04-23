@@ -1,4 +1,4 @@
-import { getSetting, upsertSetting } from '@/db/client';
+import { getLocalSetting, upsertLocalSetting } from '@/config/local-settings';
 import { ReaderPreferences } from '@/features/reader/types';
 
 const KEY = 'reader_preferences';
@@ -11,7 +11,7 @@ export const defaultReaderPreferences: ReaderPreferences = {
 };
 
 export async function getReaderPreferences(): Promise<ReaderPreferences> {
-  const raw = await getSetting(KEY);
+  const raw = await getLocalSetting(KEY);
   if (!raw) {
     return defaultReaderPreferences;
   }
@@ -27,5 +27,5 @@ export async function getReaderPreferences(): Promise<ReaderPreferences> {
 }
 
 export async function saveReaderPreferences(preferences: ReaderPreferences): Promise<void> {
-  await upsertSetting(KEY, JSON.stringify(preferences));
+  await upsertLocalSetting(KEY, JSON.stringify(preferences));
 }

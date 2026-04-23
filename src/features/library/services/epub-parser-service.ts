@@ -16,6 +16,13 @@ export interface EpubParserService {
   parseEpub(bookId: string, epubPath: string): Promise<ParsedBookManifest>;
 }
 
+interface ManifestEntry {
+  id: string;
+  href: string;
+  mediaType: string;
+  properties?: string;
+}
+
 function asArray<T>(value: T | T[] | undefined): T[] {
   if (!value) {
     return [];
@@ -34,21 +41,30 @@ function nodeText(value: unknown): string {
   if (typeof value === 'object' && value !== null && '#text' in value) {
     return String((value as Record<string, unknown>)['#text']).trim();
   }
+  if (Array.isArray(value) && value.length > 0) {
+    return nodeText(value[0]);
+  }
   return '';
 }
 
+function sanitizeResourcePath(path: string): string {
+  const withoutFragment = path.split('#')[0]?.split('?')[0] ?? '';
+  return decodeURIComponent(withoutFragment.replace(/\\/g, '/'));
+}
+
 export function resolveRelativePath(baseFilePath: string, relativePath: string): string {
-  if (!relativePath) {
+  const normalizedRelativePath = sanitizeResourcePath(relativePath);
+  if (!normalizedRelativePath) {
     return '';
   }
 
-  if (relativePath.startsWith('/')) {
-    return relativePath.slice(1);
+  if (normalizedRelativePath.startsWith('/')) {
+    return normalizedRelativePath.slice(1);
   }
 
-  const baseParts = baseFilePath.split('/').filter(Boolean);
+  const baseParts = sanitizeResourcePath(baseFilePath).split('/').filter(Boolean);
   baseParts.pop();
-  const relativeParts = relativePath.split('/').filter(Boolean);
+  const relativeParts = normalizedRelativePath.split('/').filter(Boolean);
 
   for (const part of relativeParts) {
     if (part === '.') {
@@ -80,7 +96,8 @@ export class JsEpubParserService implements EpubParserService {
 
     const containerXml = await this.readZipText(zip, 'META-INF/container.xml');
     const container = xmlParser.parse(containerXml);
-    const rootFile = container?.container?.rootfiles?.rootfile?.['full-path'];
+    const rootFileEntries = asArray(container?.container?.rootfiles?.rootfile);
+    const rootFile = sanitizeResourcePath(rootFileEntries[0]?.['full-path'] ?? '');
     if (!rootFile) {
       throw new Error('EPUB container missing OPF rootfile path.');
     }
@@ -96,34 +113,50 @@ export class JsEpubParserService implements EpubParserService {
     const author = nodeText(metadata.creator) || 'Unknown author';
     const language = nodeText(metadata.language) || 'und';
 
-    const manifestEntries = asArray(pkg.manifest?.item);
+    const manifestEntries = asArray(pkg.manifest?.item)
+      .map((item): ManifestEntry | null => {
+        if (!item?.id || !item?.href) {
+          return null;
+        }
+        return {
+          id: String(item.id),
+          href: sanitizeResourcePath(String(item.href)),
+          mediaType: String(item['media-type'] ?? ''),
+          properties: item.properties ? String(item.properties) : undefined,
+        };
+      })
+      .filter((item): item is ManifestEntry => Boolean(item));
     const spineEntries = asArray(pkg.spine?.itemref);
-    if (manifestEntries.length === 0 || spineEntries.length === 0) {
-      throw new Error('EPUB manifest or spine is empty.');
+    if (manifestEntries.length === 0) {
+      throw new Error('EPUB manifest is empty.');
     }
 
-    const manifestById = new Map<
-      string,
-      { href: string; mediaType: string; properties: string | undefined }
-    >();
+    const manifestById = new Map<string, ManifestEntry>();
     for (const item of manifestEntries) {
-      manifestById.set(item.id, {
-        href: item.href,
-        mediaType: item['media-type'],
-        properties: item.properties,
-      });
+      manifestById.set(item.id, item);
     }
+
+    const readingOrderManifest = spineEntries
+      .map((itemRef) => manifestById.get(String(itemRef?.idref ?? '')))
+      .filter((item): item is ManifestEntry => Boolean(item));
+    const fallbackManifest = manifestEntries.filter((item) =>
+      /(xhtml|html|xml)/i.test(item.mediaType),
+    );
+    const readingItems = readingOrderManifest.length > 0 ? readingOrderManifest : fallbackManifest;
 
     const chapters: ParsedChapter[] = [];
-    for (const [index, itemRef] of spineEntries.entries()) {
-      const spineItem = manifestById.get(itemRef.idref);
-      if (!spineItem) {
+    for (const [index, readingItem] of readingItems.entries()) {
+      const chapterPath = resolveRelativePath(rootFile, readingItem.href);
+      let chapterHtml: string;
+      try {
+        chapterHtml = await this.readZipText(zip, chapterPath);
+      } catch {
         continue;
       }
-
-      const chapterPath = resolveRelativePath(rootFile, spineItem.href);
-      const chapterHtml = await this.readZipText(zip, chapterPath);
       const chapterText = stripHtml(chapterHtml);
+      if (!chapterText) {
+        continue;
+      }
       const headingMatch = chapterHtml.match(/<h1[^>]*>(.*?)<\/h1>/i);
       const derivedTitle = headingMatch?.[1]?.replace(/<[^>]+>/g, '').trim();
 
@@ -159,9 +192,13 @@ export class JsEpubParserService implements EpubParserService {
   }
 
   private async readZipText(zip: JSZip, path: string): Promise<string> {
-    const file = zip.file(path);
+    const normalizedPath = sanitizeResourcePath(path);
+    const file =
+      zip.file(normalizedPath) ??
+      zip.file(normalizedPath.toLowerCase()) ??
+      zip.file(new RegExp(`^${normalizedPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i'))[0];
     if (!file) {
-      throw new Error(`Missing EPUB resource: ${path}`);
+      throw new Error(`Missing EPUB resource: ${normalizedPath}`);
     }
     return file.async('text');
   }
@@ -170,7 +207,7 @@ export class JsEpubParserService implements EpubParserService {
     bookId: string,
     zip: JSZip,
     opfPath: string,
-    manifestEntries: { id: string; href: string; [key: string]: string }[],
+    manifestEntries: ManifestEntry[],
     metadata: Record<string, unknown>,
   ): Promise<string | null> {
     const metaEntries = asArray(metadata.meta as { name?: string; content?: string }[]);

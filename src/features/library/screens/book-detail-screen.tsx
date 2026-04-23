@@ -1,10 +1,10 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { Screen } from '@/components/layout/screen';
+import { bookRepository } from '@/features/library/json-book-repository';
 import { libraryImportService } from '@/features/library/services/import-epub';
-import { bookRepository } from '@/features/library/sqlite-book-repository';
 import { Book, Chapter } from '@/features/library/types';
 import { useAppTheme } from '@/theme/theme-provider';
 import { tokens } from '@/theme/tokens';
@@ -30,6 +30,13 @@ export function BookDetailScreen() {
 
   const load = useCallback(async () => {
     setError(null);
+    if (!bookId) {
+      setBook(null);
+      setChapters([]);
+      setIsLoading(false);
+      setError('Missing book id.');
+      return;
+    }
     try {
       const [bookRecord, chapterRows] = await Promise.all([
         bookRepository.getBookById(bookId),
@@ -54,12 +61,31 @@ export function BookDetailScreen() {
     setError(null);
     try {
       await libraryImportService.retryParse(bookId);
+      await bookRepository.setParsingStatus(bookId, 'pending');
       await load();
     } catch (retryError) {
       setError(retryError instanceof Error ? retryError.message : 'Retry parse failed.');
       setIsRetrying(false);
     }
   }, [bookId, load]);
+
+  const handleDelete = useCallback(() => {
+    Alert.alert('Remove book?', 'This will delete the EPUB and all parsed data for this book.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => {
+          libraryImportService
+            .removeBook(bookId)
+            .then(() => router.replace('/'))
+            .catch((deleteError) => {
+              setError(deleteError instanceof Error ? deleteError.message : 'Delete failed.');
+            });
+        },
+      },
+    ]);
+  }, [bookId, router]);
 
   if (isLoading) {
     return (
@@ -75,6 +101,10 @@ export function BookDetailScreen() {
     return (
       <Screen>
         <Text style={[styles.title, { color: theme.colors.text }]}>Book not found.</Text>
+        {error ? <Text style={[styles.errorText, { color: theme.colors.danger }]}>{error}</Text> : null}
+        <Pressable onPress={() => router.replace('/')} style={[styles.button, { backgroundColor: theme.colors.primary }]}>
+          <Text style={styles.buttonLabel}>Back to Library</Text>
+        </Pressable>
       </Screen>
     );
   }
@@ -140,6 +170,9 @@ export function BookDetailScreen() {
         {error ? (
           <Text style={[styles.errorText, { color: theme.colors.danger }]}>{error}</Text>
         ) : null}
+        <Pressable onPress={handleDelete} style={[styles.button, { backgroundColor: theme.colors.danger }]}>
+          <Text style={styles.buttonLabel}>Delete EPUB</Text>
+        </Pressable>
       </ScrollView>
     </Screen>
   );

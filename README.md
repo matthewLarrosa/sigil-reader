@@ -21,6 +21,6 @@ npm test
 
 - `app/`: route-only files.
 - `src/features`: domain features (library, reader, tts, player, settings).
-- `src/db`: SQLite schema and persistence.
+- `src/config` and feature repositories: file-backed local state for library and settings.
 - `src/native`: native bridge contracts (Kokoro spike path).
 - `docs/architecture.md`: architecture standards.

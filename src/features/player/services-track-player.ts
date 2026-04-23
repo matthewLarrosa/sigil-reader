@@ -1,4 +1,3 @@
-import { getDatabase } from '@/db/client';
 import { PlaybackState, PlayerService, PlayerTrack } from '@/features/player/types';
 
 type TrackPlayerModule = typeof import('react-native-track-player');
@@ -144,24 +143,7 @@ export async function persistPlaybackState(params: {
   playbackPositionMs: number;
   playbackState: PlaybackState;
 }): Promise<void> {
-  const db = await getDatabase();
-  await db.runAsync(
-    `INSERT INTO playback_progress
-      (book_id, chapter_id, chunk_id, playback_position_ms, playback_state, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?)
-     ON CONFLICT(book_id) DO UPDATE SET
-       chapter_id = excluded.chapter_id,
-       chunk_id = excluded.chunk_id,
-       playback_position_ms = excluded.playback_position_ms,
-       playback_state = excluded.playback_state,
-       updated_at = excluded.updated_at;`,
-    params.bookId,
-    params.chapterId,
-    params.chunkId,
-    params.playbackPositionMs,
-    params.playbackState,
-    Date.now(),
-  );
+  void params;
 }
 
 export const playerService: PlayerService = new TrackPlayerService();

@@ -1,9 +1,10 @@
-import { getDatabase } from '@/db/client';
 import { TtsChunk, TtsJob, TtsJobScope } from '@/features/tts/types';
 import { createId } from '@/utils/id';
 
+const jobs: TtsJob[] = [];
+const storedChunks: TtsChunk[] = [];
+
 export async function enqueueTtsJob(bookId: string, scope: TtsJobScope): Promise<TtsJob> {
-  const db = await getDatabase();
   const job: TtsJob = {
     id: createId('tts_job'),
     bookId,
@@ -13,46 +14,17 @@ export async function enqueueTtsJob(bookId: string, scope: TtsJobScope): Promise
     updatedAt: Date.now(),
   };
 
-  await db.runAsync(
-    `INSERT INTO tts_jobs (id, book_id, scope, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?);`,
-    job.id,
-    job.bookId,
-    job.scope,
-    job.status,
-    job.createdAt,
-    job.updatedAt,
-  );
-
+  jobs.unshift(job);
   return job;
 }
 
 export async function upsertTtsChunks(chunks: TtsChunk[]): Promise<void> {
-  const db = await getDatabase();
-  await db.execAsync('BEGIN;');
-  try {
-    for (const chunk of chunks) {
-      await db.runAsync(
-        `INSERT INTO tts_chunks
-          (id, book_id, chapter_id, chunk_index, text, audio_path, duration_ms, status)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
-           audio_path = excluded.audio_path,
-           duration_ms = excluded.duration_ms,
-           status = excluded.status;`,
-        chunk.id,
-        chunk.bookId,
-        chunk.chapterId,
-        chunk.chunkIndex,
-        chunk.text,
-        chunk.audioPath,
-        chunk.durationMs,
-        chunk.status,
-      );
+  for (const chunk of chunks) {
+    const index = storedChunks.findIndex((storedChunk) => storedChunk.id === chunk.id);
+    if (index >= 0) {
+      storedChunks[index] = chunk;
+    } else {
+      storedChunks.push(chunk);
     }
-    await db.execAsync('COMMIT;');
-  } catch (error) {
-    await db.execAsync('ROLLBACK;');
-    throw error;
   }
 }
