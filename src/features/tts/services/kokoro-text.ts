@@ -12,6 +12,62 @@ const startEndTokenId = tokenizerVocab.$ ?? 0;
 const tokenizerPattern =
   /[^$;:,.!?\u2014\u2026"()\u201c\u201d \u0303\u02a3\u02a5\u02a6\u02a8\u1d5d\uab67AIOQSTWY\u1d4aabcdefhijklmnopqrstuvwxyz\u0251\u0250\u0252\u00e6\u03b2\u0254\u0255\u00e7\u0256\u00f0\u02a4\u0259\u025a\u025b\u025c\u025f\u0261\u0265\u0268\u026a\u029d\u026f\u0270\u014b\u0273\u0272\u0274\u00f8\u0278\u03b8\u0153\u0279\u027e\u027b\u0281\u027d\u0282\u0283\u0288\u02a7\u028a\u028b\u028c\u0263\u0264\u03c7\u028e\u0292\u0294\u02c8\u02cc\u02d0\u02b0\u02b2\u2193\u2192\u2197\u2198\u1d7b]/g;
 const splitPattern = /(\s*[;:,.!?\u00a1\u00bf\u2014\u2026"\u00ab\u00bb\u201c\u201d(){}\[\]]+\s*)+/g;
+const wordPattern = /[A-Za-z]+(?:'[A-Za-z]+)?|\d+|\s+|./g;
+const pronunciationLexicon: Record<string, string> = {
+  a: 'ə',
+  about: 'əbˈaʊt',
+  ago: 'əɡˈoʊ',
+  all: 'ˈɔl',
+  and: 'ænd',
+  are: 'ˈɑɹ',
+  call: 'kˈɔl',
+  circulation: 'sˌɚkjəlˈeɪʃən',
+  driving: 'dɹˈaɪvɪŋ',
+  for: 'fˈɔɹ',
+  have: 'hˈæv',
+  having: 'hˈævɪŋ',
+  how: 'hˈaʊ',
+  i: 'ˈaɪ',
+  in: 'ɪn',
+  interest: 'ˈɪntɚəst',
+  is: 'ɪz',
+  ishmael: 'ˈɪʃmeɪl',
+  it: 'ˈɪt',
+  little: 'lˈɪɾəl',
+  long: 'lˈɔŋ',
+  me: 'mˈiː',
+  mind: 'mˈaɪnd',
+  money: 'mˈʌni',
+  my: 'mˈaɪ',
+  never: 'nˈɛvɚ',
+  no: 'nˈoʊ',
+  nothing: 'nˈʌθɪŋ',
+  of: 'ʌv',
+  off: 'ˈɔf',
+  on: 'ˈɑn',
+  or: 'ˈɔɹ',
+  part: 'pˈɑɹt',
+  particular: 'pɚtˈɪkjəlɚ',
+  precisely: 'pɹɪsˈaɪsli',
+  purse: 'pˈɚs',
+  regulating: 'ɹˈɛɡjəleɪtɪŋ',
+  sail: 'sˈeɪl',
+  see: 'sˈiː',
+  shore: 'ʃˈɔɹ',
+  some: 'sˈʌm',
+  spleen: 'splˈiːn',
+  the: 'ðə',
+  thought: 'θˈɔt',
+  to: 'tə',
+  watery: 'wˈɔtɚi',
+  way: 'wˈeɪ',
+  with: 'wɪð',
+  world: 'wˈɚld',
+  would: 'wˈʊd',
+  years: 'jˈɪɹz',
+  you: 'jˈu',
+  your: 'jˈɔɹ',
+};
 
 function splitWithMatches(value: string, pattern: RegExp): { match: boolean; text: string }[] {
   const segments: { match: boolean; text: string }[] = [];
@@ -131,6 +187,7 @@ function normalizeInputText(text: string): string {
     .replace(/\b(?:Ms\.|MS\.(?= [A-Z]))/g, 'Miss')
     .replace(/\b(?:Mrs\.|MRS\.(?= [A-Z]))/g, 'Mrs')
     .replace(/\betc\.(?! [A-Z])/gi, 'etc')
+    .replace(/(?<=[A-Za-z])[-\u2014](?=[A-Za-z])/g, ', ')
     .replace(/\b(y)eah?\b/gi, "$1e'a")
     .replace(/\d*\.\d+|\b\d{4}s?\b|(?<!:)\b(?:[1-9]|1[0-2]):[0-5]\d\b(?!:)/g, normalizeYear)
     .replace(/(?<=\d),(?=\d)/g, '')
@@ -214,6 +271,30 @@ function normalizeTextFallbackToPhonemeLikeText(
   return collapseWhitespace(phonemeLike);
 }
 
+function normalizeWordToPhonemes(text: string, language: 'a' | 'b'): string {
+  if (/^\s+$/.test(text)) {
+    return ' ';
+  }
+
+  if (!/[A-Za-z0-9]/.test(text)) {
+    return text;
+  }
+
+  const normalizedWord = text.toLowerCase().replace(/^'+|'+$/g, '');
+  const lexiconPronunciation = pronunciationLexicon[normalizedWord];
+  if (lexiconPronunciation) {
+    return lexiconPronunciation;
+  }
+
+  return normalizeTextFallbackToPhonemeLikeText(text, language);
+}
+
+function normalizeTextSegmentToPhonemes(text: string, language: 'a' | 'b'): string {
+  return Array.from(text.matchAll(wordPattern), (match) => normalizeWordToPhonemes(match[0], language))
+    .join('')
+    .replace(/\s+/g, ' ');
+}
+
 export async function normalizeTextToPhonemes(
   text: string,
   language: 'a' | 'b' = 'a',
@@ -221,7 +302,7 @@ export async function normalizeTextToPhonemes(
   const normalizedText = normalizeInputText(text);
   const segments = splitWithMatches(normalizedText, splitPattern);
   const phonemeLikeChunks = segments.map(({ match, text: segment }) =>
-    match ? segment : normalizeTextFallbackToPhonemeLikeText(segment, language),
+    match ? segment : normalizeTextSegmentToPhonemes(segment, language),
   );
 
   const cleaned = phonemeLikeChunks.join('').replace(tokenizerPattern, '');

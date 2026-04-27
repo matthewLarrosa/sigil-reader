@@ -1,9 +1,13 @@
+import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import { useCallback, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Screen } from '@/components/layout/screen';
-import { audiobookGenerationService } from '@/features/tts/services/audiobook-generation-service';
+import {
+  audiobookGenerationService,
+  getKokoroSampleText,
+} from '@/features/tts/services/audiobook-generation-service';
 import {
   getKokoroModelStatus,
   pickAndInstallKokoroAsset,
@@ -17,7 +21,7 @@ export function KokoroSetupScreen() {
   const { theme } = useAppTheme();
   const [modelStatus, setModelStatus] = useState<KokoroModelStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [busyAction, setBusyAction] = useState<'model' | 'voice' | 'test' | null>(null);
+  const [busyAction, setBusyAction] = useState<'model' | 'voice' | 'test' | 'sample' | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -72,6 +76,20 @@ export function KokoroSetupScreen() {
     }
   }, [load]);
 
+  const playSample = useCallback(async () => {
+    setBusyAction('sample');
+    setMessage(null);
+    try {
+      const result = await audiobookGenerationService.playSampleText();
+      setMessage(result.statusMessage);
+      await load();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Unable to generate the Kokoro sample.');
+    } finally {
+      setBusyAction(null);
+    }
+  }, [load]);
+
   if (isLoading) {
     return (
       <Screen>
@@ -102,7 +120,8 @@ export function KokoroSetupScreen() {
           onPress={() => installModelAsset('model')}
           style={[styles.secondaryButton, { borderColor: theme.colors.border }]}
         >
-          <Text style={{ color: theme.colors.text }}>
+          <Ionicons name="cube" size={18} color={theme.colors.text} />
+          <Text style={[styles.buttonText, { color: theme.colors.text }]}>
             {busyAction === 'model' ? 'Importing...' : 'Import Model'}
           </Text>
         </Pressable>
@@ -111,7 +130,8 @@ export function KokoroSetupScreen() {
           onPress={() => installModelAsset('voice')}
           style={[styles.secondaryButton, { borderColor: theme.colors.border }]}
         >
-          <Text style={{ color: theme.colors.text }}>
+          <Ionicons name="mic" size={18} color={theme.colors.text} />
+          <Text style={[styles.buttonText, { color: theme.colors.text }]}>
             {busyAction === 'voice' ? 'Importing...' : 'Import US Voice'}
           </Text>
         </Pressable>
@@ -126,10 +146,47 @@ export function KokoroSetupScreen() {
             },
           ]}
         >
-          <Text style={{ color: theme.colors.text }}>
+          <Ionicons name="checkmark-circle" size={18} color={theme.colors.text} />
+          <Text style={[styles.buttonText, { color: theme.colors.text }]}>
             {busyAction === 'test' ? 'Testing...' : 'Test Load'}
           </Text>
         </Pressable>
+      </View>
+      <View
+        style={[
+          styles.panel,
+          { backgroundColor: theme.colors.surface, borderColor: theme.colors.border },
+        ]}
+      >
+        <View style={styles.sampleHeader}>
+          <View style={styles.sampleTitleRow}>
+            <Ionicons name="document-text" size={18} color={theme.colors.primary} />
+            <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Test Text</Text>
+          </View>
+          <Pressable
+            disabled={Boolean(busyAction) || !modelStatus?.readyForSynthesis}
+            onPress={playSample}
+            style={[
+              styles.primaryButton,
+              {
+                backgroundColor: theme.colors.primary,
+                opacity: Boolean(busyAction) || !modelStatus?.readyForSynthesis ? 0.55 : 1,
+              },
+            ]}
+          >
+            {busyAction === 'sample' ? (
+              <ActivityIndicator color={theme.colors.text} size="small" />
+            ) : (
+              <Ionicons name="play" size={18} color={theme.colors.text} />
+            )}
+            <Text style={[styles.primaryButtonText, { color: theme.colors.text }]}>
+              {busyAction === 'sample' ? 'Generating...' : 'Generate & Play'}
+            </Text>
+          </Pressable>
+        </View>
+        <Text style={[styles.sampleText, { color: theme.colors.textMuted }]}>
+          {getKokoroSampleText()}
+        </Text>
       </View>
       {message ? (
         <Text style={[styles.message, { color: theme.colors.textMuted }]}>{message}</Text>
@@ -167,10 +224,46 @@ const styles = StyleSheet.create({
     gap: tokens.spacing.sm,
   },
   secondaryButton: {
+    alignItems: 'center',
     borderWidth: 1,
     borderRadius: tokens.radius.sm,
+    flexDirection: 'row',
+    gap: tokens.spacing.xs,
     paddingHorizontal: tokens.spacing.md,
     paddingVertical: tokens.spacing.sm,
+  },
+  buttonText: {
+    fontSize: tokens.typography.caption,
+    fontWeight: '700',
+  },
+  sampleHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: tokens.spacing.sm,
+    justifyContent: 'space-between',
+  },
+  sampleTitleRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: tokens.spacing.xs,
+  },
+  sampleText: {
+    fontSize: tokens.typography.caption,
+    lineHeight: 19,
+  },
+  primaryButton: {
+    alignItems: 'center',
+    borderRadius: tokens.radius.sm,
+    flexDirection: 'row',
+    gap: tokens.spacing.xs,
+    minHeight: 40,
+    paddingHorizontal: tokens.spacing.md,
+    paddingVertical: tokens.spacing.sm,
+  },
+  primaryButtonText: {
+    fontSize: tokens.typography.caption,
+    fontWeight: '700',
   },
   message: {
     fontSize: tokens.typography.caption,

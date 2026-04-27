@@ -1,6 +1,9 @@
 import { bookRepository } from '@/features/library/json-book-repository';
 import { playerService } from '@/features/player/services-track-player';
-import { normalizeChapterText, splitIntoTtsChunks } from '@/features/reader/services/text-normalization';
+import {
+  normalizeChapterText,
+  splitIntoTtsChunks,
+} from '@/features/reader/services/text-normalization';
 import { filterAudiobookChaptersForNarration } from '@/features/tts/services/audiobook-chapters';
 import {
   deleteTtsDataForBook,
@@ -19,6 +22,10 @@ import { kokoroBridge } from '@/native/kokoro-bridge';
 import { createId } from '@/utils/id';
 
 const CURRENT_SYNTHESIS_VERSION = 2;
+const TTS_TARGET_CHARS_PER_CHUNK = 800;
+const TTS_MAX_CHARS_PER_CHUNK = 1100;
+const KOKORO_SAMPLE_TEXT =
+  'Call me Ishmael. Some years ago-never mind how long precisely-having little or no money in my purse, and nothing particular to interest me on shore, I thought I would sail about a little and see the watery part of the world. It is a way I have of driving off the spleen and regulating the circulation.';
 
 export interface PrepareChapterAudioResult {
   jobId: string;
@@ -39,6 +46,12 @@ export interface PrepareBookAudioResult {
   statusMessage: string;
 }
 
+export interface AudiobookGenerationEstimate {
+  bookId: string;
+  chapterCount: number;
+  chunkCount: number;
+}
+
 export interface PrepareListeningStartResult {
   jobId: string;
   bookId: string;
@@ -56,7 +69,21 @@ export interface PlayChapterAudioResult {
   statusMessage: string;
 }
 
-function buildChunkAudioPath(bookId: string, chapterId: string, chunkId: string, chunkIndex: number): string {
+export interface PlaySampleAudioResult {
+  durationMs: number;
+  statusMessage: string;
+}
+
+export function getKokoroSampleText(): string {
+  return KOKORO_SAMPLE_TEXT;
+}
+
+function buildChunkAudioPath(
+  bookId: string,
+  chapterId: string,
+  chunkId: string,
+  chunkIndex: number,
+): string {
   const paddedIndex = String(chunkIndex).padStart(4, '0');
   return `${ttsAudioDirectory(bookId, chapterId)}/${paddedIndex}-${chunkId}.wav`;
 }
@@ -127,6 +154,28 @@ export class AudiobookGenerationService {
     return filterAudiobookChaptersForNarration(chapters);
   }
 
+  async estimateBook(bookId: string): Promise<AudiobookGenerationEstimate> {
+    const chapters = await this.listChapters(bookId);
+    const chunkCount = chapters.reduce((sum, chapter) => {
+      const normalizedText = normalizeChapterText(chapter.text_content);
+      return (
+        sum +
+        splitIntoTtsChunks(
+          chapter.id,
+          normalizedText,
+          TTS_TARGET_CHARS_PER_CHUNK,
+          TTS_MAX_CHARS_PER_CHUNK,
+        ).length
+      );
+    }, 0);
+
+    return {
+      bookId,
+      chapterCount: chapters.length,
+      chunkCount,
+    };
+  }
+
   private buildChapterChunks(
     bookId: string,
     chapterId: string,
@@ -134,7 +183,12 @@ export class AudiobookGenerationService {
     chapterText: string,
   ): PlannedChapterAudio {
     const normalizedText = normalizeChapterText(chapterText);
-    const readerChunks = splitIntoTtsChunks(chapterId, normalizedText, 420);
+    const readerChunks = splitIntoTtsChunks(
+      chapterId,
+      normalizedText,
+      TTS_TARGET_CHARS_PER_CHUNK,
+      TTS_MAX_CHARS_PER_CHUNK,
+    );
     const chunks: TtsChunk[] = readerChunks.map((chunk) => ({
       id: chunk.id,
       bookId,
@@ -220,7 +274,10 @@ export class AudiobookGenerationService {
     options?: {
       jobId?: string;
       plannedChapter?: PlannedChapterAudio;
-      onChunkFinished?: (result: { readyIncrement: number; failedIncrement: number }) => Promise<void>;
+      onChunkFinished?: (result: {
+        readyIncrement: number;
+        failedIncrement: number;
+      }) => Promise<void>;
     },
   ): Promise<GeneratedChapterSummary> {
     const chapter = await bookRepository.getChapter(bookId, chapterId);
@@ -306,7 +363,12 @@ export class AudiobookGenerationService {
 
     this.runningChapters.add(runningKey);
     const job = await enqueueTtsJob(bookId, 'chapter', chapter.id);
-    const plannedChapter = this.buildChapterChunks(bookId, chapter.id, chapter.title, chapter.text_content);
+    const plannedChapter = this.buildChapterChunks(
+      bookId,
+      chapter.id,
+      chapter.title,
+      chapter.text_content,
+    );
     await updateTtsJob(job.id, {
       status: 'running',
       startedAt: Date.now(),
@@ -356,8 +418,8 @@ export class AudiobookGenerationService {
         chunkCount: summary.chunkCount,
         statusMessage:
           summary.failedCount === 0
-            ? `Generated ${summary.readyCount} local audio chunks for ${chapter.title}.`
-            : `Generated ${summary.readyCount} of ${summary.chunkCount} local audio chunks for ${chapter.title}. ${summary.failedCount} chunk${summary.failedCount === 1 ? '' : 's'} failed${summary.latestError ? `: ${summary.latestError}` : '.'}`,
+            ? `${chapter.title} audio is ready.`
+            : `${summary.failedCount} chunk${summary.failedCount === 1 ? '' : 's'} failed${summary.latestError ? `: ${summary.latestError}` : '.'}`,
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to prepare audiobook.';
@@ -464,8 +526,8 @@ export class AudiobookGenerationService {
         failedChunkCount,
         statusMessage:
           failedChunkCount === 0
-            ? `Generated the full audiobook locally: ${readyChunkCount} chunks across ${chapters.length} chapters.`
-            : `Generated ${readyChunkCount} of ${totalChunks} audiobook chunks across ${chapters.length} chapters. ${failedChunkCount} chunk${failedChunkCount === 1 ? '' : 's'} failed${latestError ? `: ${latestError}` : '.'}`,
+            ? 'Audiobook audio is ready.'
+            : `${failedChunkCount} chunk${failedChunkCount === 1 ? '' : 's'} failed${latestError ? `: ${latestError}` : '.'}`,
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to generate audiobook.';
@@ -525,6 +587,23 @@ export class AudiobookGenerationService {
       error: 'Sample synthesis is blocked until Kokoro tokenizer and voice assets are wired.',
     });
     return createId('sample_blocked');
+  }
+
+  async playSampleText(): Promise<PlaySampleAudioResult> {
+    const result = await kokoroBridge.synthesize(KOKORO_SAMPLE_TEXT);
+    await playerService.playQueue([
+      {
+        id: createId('kokoro_sample'),
+        url: result.audioPath,
+        title: 'Kokoro setup sample',
+        artist: 'Moby-Dick preview',
+      },
+    ]);
+
+    return {
+      durationMs: result.durationMs,
+      statusMessage: 'Playing the Kokoro sample.',
+    };
   }
 
   async playChapter(bookId: string, chapterId: string): Promise<PlayChapterAudioResult> {

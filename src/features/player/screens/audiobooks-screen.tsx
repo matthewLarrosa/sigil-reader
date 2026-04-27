@@ -18,7 +18,10 @@ import {
 import { Screen } from '@/components/layout/screen';
 import { bookRepository } from '@/features/library/json-book-repository';
 import { Book } from '@/features/library/types';
-import { audiobookGenerationService } from '@/features/tts/services/audiobook-generation-service';
+import {
+  AudiobookGenerationEstimate,
+  audiobookGenerationService,
+} from '@/features/tts/services/audiobook-generation-service';
 import { getKokoroModelStatus } from '@/features/tts/services/kokoro-model-pack';
 import { deleteTtsDataForBook } from '@/features/tts/services/tts-job-queue';
 import { KokoroModelStatus, TtsBookSummary } from '@/features/tts/types';
@@ -51,6 +54,7 @@ export function AudiobooksScreen() {
   const [audiobooks, setAudiobooks] = useState<Book[]>([]);
   const [libraryBooks, setLibraryBooks] = useState<Book[]>([]);
   const [summaries, setSummaries] = useState<Record<string, TtsBookSummary>>({});
+  const [estimates, setEstimates] = useState<Record<string, AudiobookGenerationEstimate>>({});
   const [modelStatus, setModelStatus] = useState<KokoroModelStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [busyBookId, setBusyBookId] = useState<string | null>(null);
@@ -65,19 +69,33 @@ export function AudiobooksScreen() {
         bookRepository.listAudiobookEntries(),
       ]);
       const audiobookIds = new Set(audiobookEntries.map((entry) => entry.book_id));
+      const availableLibraryBooks = bookRows.filter((book) => !audiobookIds.has(book.id));
+      const estimateBooks = [...audiobookRows, ...availableLibraryBooks].filter(
+        (book) => book.parsing_status === 'ready',
+      );
       const bookSummaries = await Promise.all(
         audiobookRows.map(
           async (book) =>
             [book.id, await audiobookGenerationService.getBookSummary(book.id)] as const,
         ),
       );
+      const bookEstimates = await Promise.all(
+        estimateBooks.map(async (book) => {
+          try {
+            return [book.id, await audiobookGenerationService.estimateBook(book.id)] as const;
+          } catch {
+            return null;
+          }
+        }),
+      );
       const runtimeStatus = await kokoroBridge
         .getStatus()
         .catch(async () => getKokoroModelStatus(false));
 
       setAudiobooks(audiobookRows);
-      setLibraryBooks(bookRows.filter((book) => !audiobookIds.has(book.id)));
+      setLibraryBooks(availableLibraryBooks);
       setSummaries(Object.fromEntries(bookSummaries));
+      setEstimates(Object.fromEntries(bookEstimates.filter((entry) => entry !== null)));
       setModelStatus(runtimeStatus);
       setBackgroundBookIds(
         audiobookRows
@@ -204,25 +222,28 @@ export function AudiobooksScreen() {
     [busyBookId, summaries],
   );
 
-  const getGenerationTiming = useCallback((bookId: string) => {
-    const summary = summaries[bookId];
-    const job = summary?.latestJob;
-    if (!job || job.status !== 'running' || !job.startedAt) {
-      return null;
-    }
+  const getGenerationTiming = useCallback(
+    (bookId: string) => {
+      const summary = summaries[bookId];
+      const job = summary?.latestJob;
+      if (!job || job.status !== 'running' || !job.startedAt) {
+        return null;
+      }
 
-    const elapsedMs = Math.max(0, Date.now() - job.startedAt);
-    const completedChunks = job.completedChunks;
-    const totalChunks = job.totalChunks ?? 0;
-    const remainingChunks = Math.max(0, totalChunks - completedChunks);
-    const averageChunkMs = completedChunks > 0 ? elapsedMs / completedChunks : null;
-    const remainingMs = averageChunkMs ? remainingChunks * averageChunkMs : null;
+      const elapsedMs = Math.max(0, Date.now() - job.startedAt);
+      const completedChunks = job.completedChunks;
+      const totalChunks = job.totalChunks ?? 0;
+      const remainingChunks = Math.max(0, totalChunks - completedChunks);
+      const averageChunkMs = completedChunks > 0 ? elapsedMs / completedChunks : null;
+      const remainingMs = averageChunkMs ? remainingChunks * averageChunkMs : null;
 
-    return {
-      elapsedMs,
-      remainingMs,
-    };
-  }, [summaries]);
+      return {
+        elapsedMs,
+        remainingMs,
+      };
+    },
+    [summaries],
+  );
 
   const renderSummary = useCallback(
     (bookId: string) => {
@@ -267,6 +288,20 @@ export function AudiobooksScreen() {
     [backgroundBookIds, getGenerationTiming, summaries],
   );
 
+  const renderEstimate = useCallback(
+    (bookId: string) => {
+      const estimate = estimates[bookId];
+      if (!estimate) {
+        return null;
+      }
+
+      const chapterLabel = `${estimate.chapterCount} narratable chapter${estimate.chapterCount === 1 ? '' : 's'}`;
+      const chunkLabel = `${estimate.chunkCount} estimated chunk${estimate.chunkCount === 1 ? '' : 's'}`;
+      return `${chapterLabel} - ${chunkLabel}`;
+    },
+    [estimates],
+  );
+
   if (isLoading) {
     return (
       <Screen>
@@ -303,7 +338,10 @@ export function AudiobooksScreen() {
         ListHeaderComponent={
           <View style={styles.header}>
             <View style={styles.titleRow}>
-              <Image source={require('../../../../assets/images/gem-background.png')} style={styles.titleGem} />
+              <Image
+                source={require('../../../../assets/images/gem-background.png')}
+                style={styles.titleGem}
+              />
               <Text style={[styles.heading, { color: theme.colors.text }]}>Audiobooks</Text>
             </View>
             <Pressable
@@ -355,7 +393,9 @@ export function AudiobooksScreen() {
         ListFooterComponent={
           <View style={styles.footer}>
             <View style={[styles.insetDivider, { backgroundColor: theme.colors.textMuted }]} />
-            <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>Add from Library</Text>
+            <Text style={[styles.sectionTitle, { color: theme.colors.text }]}>
+              Add from Library
+            </Text>
             {libraryBooks.length === 0 ? (
               <Text style={[styles.caption, { color: theme.colors.textMuted }]}>
                 Every library book is already in Audiobooks.
@@ -370,12 +410,20 @@ export function AudiobooksScreen() {
                   ]}
                 >
                   <View style={styles.bookText}>
-                    <Text style={[styles.bookTitle, { color: theme.colors.text }]} numberOfLines={2}>
+                    <Text
+                      style={[styles.bookTitle, { color: theme.colors.text }]}
+                      numberOfLines={2}
+                    >
                       {book.title ?? book.original_filename}
                     </Text>
                     <Text style={[styles.caption, { color: theme.colors.textMuted }]}>
                       {book.author ?? 'Unknown author'} - {book.parsing_status}
                     </Text>
+                    {book.parsing_status === 'ready' ? (
+                      <Text style={[styles.caption, { color: theme.colors.textMuted }]}>
+                        {renderEstimate(book.id) ?? 'Estimating audiobook size...'}
+                      </Text>
+                    ) : null}
                   </View>
                   <Pressable
                     onPress={() => addFromLibrary(book.id)}
@@ -389,114 +437,119 @@ export function AudiobooksScreen() {
           </View>
         }
         renderItem={({ item }) => {
-          const isBookPreparing =
-            busyBookId === item.id || backgroundBookIds.includes(item.id);
+          const isBookPreparing = busyBookId === item.id || backgroundBookIds.includes(item.id);
           const summary = summaries[item.id];
           const job = summary?.latestJob;
           const isGenerationPaused = job?.status === 'paused';
-          const isGenerationRunning = isBookPreparing || job?.status === 'running' || isGenerationPaused;
+          const isGenerationRunning =
+            isBookPreparing || job?.status === 'running' || isGenerationPaused;
           const hasPreparedAudio = Boolean(summary && summary.readyChunks > 0);
           const canPrepare =
             item.parsing_status === 'ready' && !hasPreparedAudio && !isGenerationRunning;
 
           return (
             <View
-            style={[
-              styles.bookCard,
-              { backgroundColor: theme.colors.surface, borderColor: theme.colors.border },
-            ]}
-          >
-            <Pressable
-              style={styles.bookText}
-              onPress={() =>
-                router.push({
-                  pathname: '/player/[bookId]',
-                  params: { bookId: item.id },
-                })
-              }
+              style={[
+                styles.bookCard,
+                { backgroundColor: theme.colors.surface, borderColor: theme.colors.border },
+              ]}
             >
-              <Text style={[styles.bookTitle, { color: theme.colors.text }]} numberOfLines={2}>
-                {item.title ?? item.original_filename}
-              </Text>
-              <Text style={[styles.caption, { color: theme.colors.textMuted }]}>
-                {item.author ?? 'Unknown author'} - {item.parsing_status}
-              </Text>
-              {isGenerationRunning ? (
-                <>
+              <Pressable
+                style={styles.bookText}
+                onPress={() =>
+                  router.push({
+                    pathname: '/player/[bookId]',
+                    params: { bookId: item.id },
+                  })
+                }
+              >
+                <Text style={[styles.bookTitle, { color: theme.colors.text }]} numberOfLines={2}>
+                  {item.title ?? item.original_filename}
+                </Text>
+                <Text style={[styles.caption, { color: theme.colors.textMuted }]}>
+                  {item.author ?? 'Unknown author'} - {item.parsing_status}
+                </Text>
+                {canPrepare ? (
                   <Text style={[styles.caption, { color: theme.colors.textMuted }]}>
-                    {renderSummary(item.id)}
+                    {renderEstimate(item.id) ?? 'Estimating audiobook size...'}
                   </Text>
-                  <View
+                ) : null}
+                {isGenerationRunning ? (
+                  <>
+                    <Text style={[styles.caption, { color: theme.colors.textMuted }]}>
+                      {renderSummary(item.id)}
+                    </Text>
+                    <View
+                      style={[
+                        styles.progressTrack,
+                        {
+                          backgroundColor: theme.colors.background,
+                          borderColor: theme.colors.border,
+                        },
+                      ]}
+                    >
+                      <View
+                        style={[
+                          styles.progressFill,
+                          {
+                            backgroundColor: theme.colors.primary,
+                            width: `${Math.round(getGenerationProgress(item.id) * 100)}%`,
+                          },
+                        ]}
+                      />
+                    </View>
+                    <Text style={[styles.caption, { color: theme.colors.textMuted }]}>
+                      Generation {Math.round(getGenerationProgress(item.id) * 100)}%
+                    </Text>
+                  </>
+                ) : null}
+              </Pressable>
+              <View style={styles.cardActions}>
+                {canPrepare ? (
+                  <Pressable
+                    onPress={() => generateAudiobook(item.id)}
                     style={[
-                      styles.progressTrack,
+                      styles.secondaryButton,
                       {
-                        backgroundColor: theme.colors.background,
                         borderColor: theme.colors.border,
                       },
                     ]}
                   >
-                    <View
-                      style={[
-                        styles.progressFill,
-                        {
-                          backgroundColor: theme.colors.primary,
-                          width: `${Math.round(getGenerationProgress(item.id) * 100)}%`,
-                        },
-                      ]}
-                    />
-                  </View>
-                  <Text style={[styles.caption, { color: theme.colors.textMuted }]}>
-                    Generation {Math.round(getGenerationProgress(item.id) * 100)}%
-                  </Text>
-                </>
-              ) : null}
-            </Pressable>
-            <View style={styles.cardActions}>
-              {canPrepare ? (
+                    <Text style={{ color: theme.colors.text }}>Prepare</Text>
+                  </Pressable>
+                ) : null}
+                {job?.status === 'running' ? (
+                  <Pressable
+                    onPress={() => pauseAudiobook(item.id)}
+                    style={[
+                      styles.menuButton,
+                      { borderColor: theme.colors.border, backgroundColor: theme.colors.surface },
+                    ]}
+                  >
+                    <Ionicons name="pause" size={18} color={theme.colors.text} />
+                  </Pressable>
+                ) : null}
+                {isGenerationPaused ? (
+                  <Pressable
+                    onPress={() => resumeAudiobook(item.id)}
+                    style={[
+                      styles.menuButton,
+                      { borderColor: theme.colors.border, backgroundColor: theme.colors.surface },
+                    ]}
+                  >
+                    <Ionicons name="play" size={18} color={theme.colors.text} />
+                  </Pressable>
+                ) : null}
                 <Pressable
-                  onPress={() => generateAudiobook(item.id)}
-                  style={[
-                    styles.secondaryButton,
-                    {
-                      borderColor: theme.colors.border,
-                    },
-                  ]}
-                >
-                  <Text style={{ color: theme.colors.text }}>Prepare</Text>
-                </Pressable>
-              ) : null}
-              {job?.status === 'running' ? (
-                <Pressable
-                  onPress={() => pauseAudiobook(item.id)}
+                  onPress={() => openAudiobookMenu(item)}
                   style={[
                     styles.menuButton,
                     { borderColor: theme.colors.border, backgroundColor: theme.colors.surface },
                   ]}
                 >
-                  <Ionicons name="pause" size={18} color={theme.colors.text} />
+                  <Ionicons name="ellipsis-horizontal" size={18} color={theme.colors.text} />
                 </Pressable>
-              ) : null}
-              {isGenerationPaused ? (
-                <Pressable
-                  onPress={() => resumeAudiobook(item.id)}
-                  style={[
-                    styles.menuButton,
-                    { borderColor: theme.colors.border, backgroundColor: theme.colors.surface },
-                  ]}
-                >
-                  <Ionicons name="play" size={18} color={theme.colors.text} />
-                </Pressable>
-              ) : null}
-              <Pressable
-                onPress={() => openAudiobookMenu(item)}
-                style={[
-                  styles.menuButton,
-                  { borderColor: theme.colors.border, backgroundColor: theme.colors.surface },
-                ]}
-              >
-                <Ionicons name="ellipsis-horizontal" size={18} color={theme.colors.text} />
-              </Pressable>
-            </View>
+              </View>
             </View>
           );
         }}
