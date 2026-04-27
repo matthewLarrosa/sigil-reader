@@ -3,6 +3,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 
 import { bookRepository } from '@/features/library/json-book-repository';
 import { epubParserService } from '@/features/library/services/epub-parser-service';
+import { deleteTtsDataForBook, resetTtsData } from '@/features/tts/services/tts-job-queue';
 import { createId } from '@/utils/id';
 
 const PARSE_TIMEOUT_MS = 90_000;
@@ -92,6 +93,7 @@ export class LibraryImportService {
     }
 
     await bookRepository.deleteBook(bookId);
+    await deleteTtsDataForBook(bookId);
     const bookDir = book.epub_path.replace(/\/source\.epub$/i, '').replace(/\\source\.epub$/i, '');
     if (bookDir) {
       await FileSystem.deleteAsync(bookDir, { idempotent: true });
@@ -100,6 +102,7 @@ export class LibraryImportService {
 
   async resetLocalData(): Promise<void> {
     await bookRepository.reset();
+    await resetTtsData();
 
     if (FileSystem.documentDirectory) {
       const booksPath = `${FileSystem.documentDirectory}books`;

@@ -2,6 +2,7 @@ import {
   AudiobookEntry,
   Book,
   Chapter,
+  ChapterReadRecord,
   ParsedBookManifest,
   ParsingStatus,
   ReadingProgressRecord,
@@ -35,6 +36,9 @@ export interface BookRepository {
   searchBook(bookId: string, query: string): Promise<Chapter[]>;
   saveReadingProgress(progress: ReadingProgressRecord): Promise<void>;
   getReadingProgress(bookId: string): Promise<ReadingProgressRecord | null>;
+  listReadChapters(bookId: string): Promise<ChapterReadRecord[]>;
+  markChapterRead(bookId: string, chapterId: string): Promise<void>;
+  markChapterUnread(bookId: string, chapterId: string): Promise<void>;
   listContinueReading(limit?: number): Promise<ReadingProgressRecord[]>;
   getContinueReadingItems(limit?: number): Promise<
     (ReadingProgressRecord & {

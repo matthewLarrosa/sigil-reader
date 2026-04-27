@@ -83,6 +83,9 @@ export function ReaderScreen() {
 
   const goToChapter = useCallback(
     async (direction: 'previous' | 'next') => {
+      if (direction === 'next') {
+        await bookRepository.markChapterRead(bookId, chapterId);
+      }
       const adjacent = await bookRepository.getAdjacentChapter(bookId, chapterId, direction);
       if (adjacent) {
         router.replace({
@@ -127,8 +130,12 @@ export function ReaderScreen() {
         latestProgressRef.current.savedAt = now;
         await persistProgress(ratio, contentOffset.y);
       }
+
+      if (ratio >= 0.98) {
+        await bookRepository.markChapterRead(bookId, chapterId);
+      }
     },
-    [persistProgress],
+    [bookId, chapterId, persistProgress],
   );
 
   const restoreScrollPosition = useCallback(() => {

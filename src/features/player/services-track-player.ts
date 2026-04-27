@@ -1,25 +1,95 @@
+import {
+  type AudioPlayer,
+  type AudioStatus,
+  createAudioPlayer,
+  setAudioModeAsync,
+} from 'expo-audio';
+
 import { PlaybackState, PlayerService, PlayerTrack } from '@/features/player/types';
 
-type TrackPlayerModule = typeof import('react-native-track-player');
+type AudioSubscription = {
+  remove(): void;
+};
 
-class TrackPlayerService implements PlayerService {
+class ExpoAudioPlayerService implements PlayerService {
   private initialized = false;
-  private module: TrackPlayerModule | null = null;
+  private player: AudioPlayer | null = null;
+  private queue: PlayerTrack[] = [];
+  private currentIndex = 0;
+  private playbackState = PlaybackState.IDLE;
+  private statusSubscription: AudioSubscription | null = null;
 
-  private async getModule(): Promise<TrackPlayerModule | null> {
-    if (this.module) {
-      return this.module;
+  private async ensurePlayer(): Promise<AudioPlayer> {
+    if (this.player) {
+      return this.player;
     }
 
-    try {
-      const mod = await import('react-native-track-player');
-      if (!mod?.default) {
-        return null;
+    const player = createAudioPlayer(null, {
+      updateInterval: 250,
+      keepAudioSessionActive: true,
+    });
+
+    this.statusSubscription?.remove();
+    this.statusSubscription = player.addListener?.('playbackStatusUpdate', (status: AudioStatus) => {
+      void this.handleStatusUpdate(status);
+    }) as AudioSubscription | null;
+
+    this.player = player;
+    return player;
+  }
+
+  private async handleStatusUpdate(status: AudioStatus): Promise<void> {
+    if (status.didJustFinish) {
+      if (this.currentIndex < this.queue.length - 1) {
+        await this.loadTrack(this.currentIndex + 1, true);
+      } else {
+        this.playbackState = PlaybackState.COMPLETED;
       }
-      this.module = mod;
-      return mod;
-    } catch {
-      return null;
+      return;
+    }
+
+    if (status.isBuffering) {
+      this.playbackState = PlaybackState.BUFFERING;
+      return;
+    }
+
+    if (status.playing) {
+      this.playbackState = PlaybackState.PLAYING;
+      return;
+    }
+
+    if (status.isLoaded && status.currentTime > 0) {
+      this.playbackState = PlaybackState.PAUSED;
+    }
+  }
+
+  private async loadTrack(index: number, autoplay: boolean): Promise<void> {
+    const track = this.queue[index];
+    if (!track) {
+      throw new Error('No audio track is available for playback.');
+    }
+
+    const player = await this.ensurePlayer();
+    this.currentIndex = index;
+    this.playbackState = PlaybackState.PREPARING;
+
+    player.replace({ uri: track.url });
+    player.setActiveForLockScreen(
+      true,
+      {
+        title: track.title,
+        artist: track.artist,
+        artworkUrl: track.artwork,
+      },
+      {
+        showSeekBackward: true,
+        showSeekForward: true,
+      },
+    );
+
+    if (autoplay) {
+      player.play();
+      this.playbackState = PlaybackState.PLAYING;
     }
   }
 
@@ -28,111 +98,58 @@ class TrackPlayerService implements PlayerService {
       return;
     }
 
-    const mod = await this.getModule();
-    if (!mod) {
-      return;
-    }
-
-    const TrackPlayer = mod.default;
-    const { Capability, Event, RepeatMode } = mod;
-    if (!Capability || !Event || !RepeatMode) {
-      return;
-    }
-
-    await TrackPlayer.setupPlayer();
-    await TrackPlayer.updateOptions({
-      capabilities: [
-        Capability.Play,
-        Capability.Pause,
-        Capability.SeekTo,
-        Capability.SkipToNext,
-        Capability.SkipToPrevious,
-      ],
-      compactCapabilities: [Capability.Play, Capability.Pause],
-      notificationCapabilities: [
-        Capability.Play,
-        Capability.Pause,
-        Capability.SeekTo,
-        Capability.SkipToNext,
-        Capability.SkipToPrevious,
-      ],
-      progressUpdateEventInterval: 1,
+    await setAudioModeAsync({
+      playsInSilentMode: true,
+      shouldPlayInBackground: true,
+      interruptionMode: 'duckOthers',
     });
-    await TrackPlayer.setRepeatMode(RepeatMode.Off);
-
-    TrackPlayer.addEventListener(Event.RemotePause, () => {
-      void TrackPlayer.pause();
-    });
-    TrackPlayer.addEventListener(Event.RemotePlay, () => {
-      void TrackPlayer.play();
-    });
-
+    await this.ensurePlayer();
     this.initialized = true;
   }
 
   async playQueue(tracks: PlayerTrack[]): Promise<void> {
-    await this.setup();
-    const mod = await this.getModule();
-    if (!mod) {
-      return;
+    if (tracks.length === 0) {
+      throw new Error('No audio tracks were queued for playback.');
     }
-    const TrackPlayer = mod.default;
-    await TrackPlayer.reset();
-    await TrackPlayer.add(
-      tracks.map((track) => ({
-        id: track.id,
-        url: track.url,
-        title: track.title,
-        artist: track.artist ?? 'Sigil Reader',
-        artwork: track.artwork,
-      })),
-    );
-    await TrackPlayer.play();
+
+    await this.setup();
+    this.queue = tracks;
+    await this.loadTrack(0, true);
   }
 
   async pause(): Promise<void> {
-    const mod = await this.getModule();
-    if (!mod) {
-      return;
-    }
-    const TrackPlayer = mod.default;
-    await TrackPlayer.pause();
+    const player = await this.ensurePlayer();
+    player.pause();
+    this.playbackState = PlaybackState.PAUSED;
   }
 
   async resume(): Promise<void> {
-    const mod = await this.getModule();
-    if (!mod) {
-      return;
-    }
-    const TrackPlayer = mod.default;
-    await TrackPlayer.play();
+    const player = await this.ensurePlayer();
+    player.play();
+    this.playbackState = PlaybackState.PLAYING;
   }
 
   async seekTo(positionSeconds: number): Promise<void> {
-    const mod = await this.getModule();
-    if (!mod) {
-      return;
-    }
-    const TrackPlayer = mod.default;
-    await TrackPlayer.seekTo(positionSeconds);
+    const player = await this.ensurePlayer();
+    await player.seekTo(positionSeconds);
   }
 
   async skipToNext(): Promise<void> {
-    const mod = await this.getModule();
-    if (!mod) {
+    if (this.currentIndex >= this.queue.length - 1) {
       return;
     }
-    const TrackPlayer = mod.default;
-    await TrackPlayer.skipToNext();
+
+    await this.loadTrack(this.currentIndex + 1, true);
   }
 
   async skipToPrevious(): Promise<void> {
-    const mod = await this.getModule();
-    if (!mod) {
+    if (this.currentIndex <= 0) {
+      const player = await this.ensurePlayer();
+      await player.seekTo(0);
       return;
     }
-    const TrackPlayer = mod.default;
-    await TrackPlayer.skipToPrevious();
+
+    await this.loadTrack(this.currentIndex - 1, true);
   }
 }
 
@@ -146,4 +163,4 @@ export async function persistPlaybackState(params: {
   void params;
 }
 
-export const playerService: PlayerService = new TrackPlayerService();
+export const playerService: PlayerService = new ExpoAudioPlayerService();

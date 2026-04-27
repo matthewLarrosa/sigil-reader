@@ -46,15 +46,15 @@ export const appThemes: Record<ThemeName, AppTheme> = {
   light: {
     name: 'light',
     colors: {
-      background: '#F7F7F2',
+      background: '#F7FAFC',
       surface: '#FFFFFF',
-      text: '#101518',
-      textMuted: '#59616B',
-      primary: '#2366A3',
-      border: '#D9DEE3',
+      text: '#10202A',
+      textMuted: '#697680',
+      primary: '#8FD3F4',
+      border: '#E5EDF2',
       success: '#0B7A50',
       danger: '#A32424',
-      highlight: '#DCEEFF',
+      highlight: '#E8F7FE',
     },
   },
   sepia: {

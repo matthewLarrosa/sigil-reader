@@ -48,6 +48,12 @@ export interface ReadingProgressRecord {
   updated_at: number;
 }
 
+export interface ChapterReadRecord {
+  book_id: string;
+  chapter_id: string;
+  read_at: number;
+}
+
 export interface AudiobookEntry {
   book_id: string;
   added_at: number;

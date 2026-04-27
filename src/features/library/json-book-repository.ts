@@ -5,6 +5,7 @@ import {
   AudiobookEntry,
   Book,
   Chapter,
+  ChapterReadRecord,
   ParsedBookManifest,
   ParsingStatus,
   ReadingProgressRecord,
@@ -23,6 +24,7 @@ interface LibraryStore {
   books: Book[];
   chapters: Chapter[];
   readingProgress: ReadingProgressRecord[];
+  readChapters: ChapterReadRecord[];
   bookmarks: BookmarkRecord[];
   audiobooks: AudiobookEntry[];
 }
@@ -31,6 +33,7 @@ const emptyStore: LibraryStore = {
   books: [],
   chapters: [],
   readingProgress: [],
+  readChapters: [],
   bookmarks: [],
   audiobooks: [],
 };
@@ -50,6 +53,7 @@ function cloneStore(store: LibraryStore): LibraryStore {
     books: [...store.books],
     chapters: [...store.chapters],
     readingProgress: [...store.readingProgress],
+    readChapters: [...store.readChapters],
     bookmarks: [...store.bookmarks],
     audiobooks: [...store.audiobooks],
   };
@@ -78,6 +82,7 @@ async function readStore(): Promise<LibraryStore> {
       books: parsed.books ?? [],
       chapters: parsed.chapters ?? [],
       readingProgress: parsed.readingProgress ?? [],
+      readChapters: parsed.readChapters ?? [],
       bookmarks: parsed.bookmarks ?? [],
       audiobooks: parsed.audiobooks ?? [],
     };
@@ -119,6 +124,7 @@ export class JsonBookRepository implements BookRepository {
       store.books = store.books.filter((book) => book.id !== bookId);
       store.chapters = store.chapters.filter((chapter) => chapter.book_id !== bookId);
       store.readingProgress = store.readingProgress.filter((progress) => progress.book_id !== bookId);
+      store.readChapters = store.readChapters.filter((chapter) => chapter.book_id !== bookId);
       store.bookmarks = store.bookmarks.filter((bookmark) => bookmark.book_id !== bookId);
       store.audiobooks = store.audiobooks.filter((entry) => entry.book_id !== bookId);
     });
@@ -264,6 +270,35 @@ export class JsonBookRepository implements BookRepository {
   async getReadingProgress(bookId: string): Promise<ReadingProgressRecord | null> {
     const store = await readStore();
     return store.readingProgress.find((progress) => progress.book_id === bookId) ?? null;
+  }
+
+  async listReadChapters(bookId: string): Promise<ChapterReadRecord[]> {
+    const store = await readStore();
+    return store.readChapters.filter((chapter) => chapter.book_id === bookId);
+  }
+
+  async markChapterRead(bookId: string, chapterId: string): Promise<void> {
+    await updateStore((store) => {
+      const exists = store.readChapters.some(
+        (chapter) => chapter.book_id === bookId && chapter.chapter_id === chapterId,
+      );
+      if (exists) {
+        return;
+      }
+
+      store.readChapters = [
+        { book_id: bookId, chapter_id: chapterId, read_at: Date.now() },
+        ...store.readChapters,
+      ];
+    });
+  }
+
+  async markChapterUnread(bookId: string, chapterId: string): Promise<void> {
+    await updateStore((store) => {
+      store.readChapters = store.readChapters.filter(
+        (chapter) => !(chapter.book_id === bookId && chapter.chapter_id === chapterId),
+      );
+    });
   }
 
   async listContinueReading(limit = 5): Promise<ReadingProgressRecord[]> {

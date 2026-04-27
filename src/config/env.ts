@@ -17,6 +17,6 @@ function withDefault<T extends string>(value: string | undefined, fallback: T): 
 
 export const runtimeConfig: RuntimeConfig = {
   appEnv: withDefault(getPublicEnv('EXPO_PUBLIC_APP_ENV'), 'development') as AppEnv,
-  defaultTheme: withDefault(getPublicEnv('EXPO_PUBLIC_DEFAULT_THEME'), 'sepia') as ReaderThemeName,
+  defaultTheme: withDefault(getPublicEnv('EXPO_PUBLIC_DEFAULT_THEME'), 'light') as ReaderThemeName,
   internalLogLevel: withDefault(process.env.SIGIL_INTERNAL_LOG_LEVEL, 'info'),
 };

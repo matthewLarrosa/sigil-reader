@@ -16,7 +16,9 @@ export default function RootLayout() {
         <Stack.Screen name="books/[bookId]" options={{ title: 'Book' }} />
         <Stack.Screen name="reader/[bookId]/[chapterId]" options={{ title: 'Reader' }} />
         <Stack.Screen name="reader-menu/[bookId]/[chapterId]" options={{ title: 'Reader Menu' }} />
-        <Stack.Screen name="player/[bookId]" options={{ title: 'Player' }} />
+        <Stack.Screen name="player/[bookId]" options={{ title: 'Audiobook' }} />
+        <Stack.Screen name="device-data" options={{ title: 'Device Data' }} />
+        <Stack.Screen name="kokoro-setup" options={{ title: 'Kokoro Setup' }} />
       </Stack>
     </AppProviders>
   );

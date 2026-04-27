@@ -3,25 +3,32 @@ import {
   DefaultTheme,
   ThemeProvider as NavigationThemeProvider,
 } from '@react-navigation/native';
-import Constants from 'expo-constants';
 import { StatusBar } from 'expo-status-bar';
-import { PropsWithChildren, useEffect } from 'react';
+import { PropsWithChildren, useEffect, useState } from 'react';
+import { ActivityIndicator, Image, StyleSheet, Text, View } from 'react-native';
 
-import { playerService } from '@/features/player/services-track-player';
 import { AppThemeProvider, useAppTheme } from '@/theme/theme-provider';
+import { tokens } from '@/theme/tokens';
 
 function InternalProviders({ children }: PropsWithChildren) {
   const { theme } = useAppTheme();
-  const isExpoGo =
-    Constants.appOwnership === 'expo' || Constants.executionEnvironment === 'storeClient';
+  const [isLaunching, setIsLaunching] = useState(true);
 
   useEffect(() => {
-    if (!isExpoGo) {
-      playerService.setup().catch((error) => {
-        console.warn('Audio player setup skipped', error);
-      });
-    }
-  }, [isExpoGo]);
+    const timeout = setTimeout(() => setIsLaunching(false), 700);
+    return () => clearTimeout(timeout);
+  }, []);
+
+  if (isLaunching) {
+    return (
+      <View style={[styles.launchScreen, { backgroundColor: theme.colors.background }]}>
+        <Image source={require('../../assets/images/gem-background.png')} style={styles.launchLogo} />
+        <Text style={[styles.launchTitle, { color: theme.colors.text }]}>Sigil</Text>
+        <ActivityIndicator color={theme.colors.primary} size="large" />
+        <StatusBar style="dark" />
+      </View>
+    );
+  }
 
   return (
     <NavigationThemeProvider value={theme.name === 'dark' ? DarkTheme : DefaultTheme}>
@@ -38,3 +45,21 @@ export function AppProviders({ children }: PropsWithChildren) {
     </AppThemeProvider>
   );
 }
+
+const styles = StyleSheet.create({
+  launchScreen: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: tokens.spacing.lg,
+  },
+  launchLogo: {
+    width: 132,
+    height: 132,
+    resizeMode: 'contain',
+  },
+  launchTitle: {
+    fontSize: 34,
+    fontWeight: '800',
+  },
+});
