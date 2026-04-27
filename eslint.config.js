@@ -19,6 +19,6 @@ module.exports = defineConfig([
   },
   eslintConfigPrettier,
   {
-    ignores: ['dist/*', 'coverage/*', 'node_modules/*'],
+    ignores: ['.expo/*', 'dist/*', 'coverage/*', 'node_modules/*'],
   },
 ]);
